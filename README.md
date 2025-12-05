@@ -77,12 +77,7 @@ Data is saved locally using **SharedPreferences**, loaded automatically on app s
 - Firebase Core
 - Firebase Firestore
 
----
 
-## 📸 **Screenshots (Optional)**  
-_Add screenshots here later for UI demonstration._
-
----
 
 ## 🔧 Setup Instructions
 
