@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "207825071896",
+    "project_id": "symbio-tech",
+    "storage_bucket": "symbio-tech.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:207825071896:android:03321c721f736a4267386d",
+        "android_client_info": {
+          "package_name": "com.example.see_pr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWnEKW769sTIDuJmyuN-RHYwNrtmx_tKg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

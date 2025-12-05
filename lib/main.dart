@@ -3,9 +3,10 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-// import 'package:flutter_mjpeg/flutter_mjpeg.dart'; // OLD: ESP32 stream
 import 'package:provider/provider.dart';
 import 'package:camera/camera.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -13,12 +14,16 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';   // <--- NEW
+
 
 // =======================
 // ENTRY POINT
 // =======================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  print(" Firebase initialized successfully");
   runApp(const SymbioTechApp());
 }
 
@@ -676,6 +681,9 @@ class BluetoothService extends ChangeNotifier {
 // =======================
 // Settings Page
 // =======================
+// =======================
+// Settings Page (with SharedPreferences)
+// =======================
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -688,8 +696,45 @@ class _SettingsPageState extends State<SettingsPage> {
   bool vibrationEnabled = true;
   bool darkModeEnabled = false;
 
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      notificationsEnabled = prefs.getBool('notificationsEnabled') ?? true;
+      vibrationEnabled = prefs.getBool('vibrationEnabled') ?? true;
+      darkModeEnabled = prefs.getBool('darkModeEnabled') ?? false;
+      _loading = false;
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notificationsEnabled', notificationsEnabled);
+    await prefs.setBool('vibrationEnabled', vibrationEnabled);
+    await prefs.setBool('darkModeEnabled', darkModeEnabled);
+  }
+
+  void _updateSettings(void Function() update) {
+    setState(update);
+    _saveSettings();
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Settings')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
@@ -716,7 +761,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   const Text('Receive important alerts and updates'),
                   value: notificationsEnabled,
                   onChanged: (val) {
-                    setState(() => notificationsEnabled = val);
+                    _updateSettings(() => notificationsEnabled = val);
                   },
                   secondary: const Icon(Icons.notifications_active),
                 ),
@@ -726,7 +771,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: const Text('Use vibration for alerts'),
                   value: vibrationEnabled,
                   onChanged: (val) {
-                    setState(() => vibrationEnabled = val);
+                    _updateSettings(() => vibrationEnabled = val);
                   },
                   secondary: const Icon(Icons.vibration),
                 ),
@@ -736,54 +781,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: const Text('Preview dark style'),
                   value: darkModeEnabled,
                   onChanged: (val) {
-                    setState(() => darkModeEnabled = val);
+                    _updateSettings(() => darkModeEnabled = val);
                   },
                   secondary: const Icon(Icons.dark_mode),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Feedback & Support',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Card(
-            elevation: 3,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.star_rate, color: Colors.amber),
-                  title: const Text('Rate the App'),
-                  subtitle:
-                  const Text('Tell us what you think of SymbioTech'),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const RateUsPage()),
-                    );
-                  },
-                ),
-                const Divider(height: 0),
-                ListTile(
-                  leading: const Icon(Icons.contact_mail, color: Colors.blue),
-                  title: const Text('Contact Us'),
-                  subtitle:
-                  const Text('Get help or share your suggestions'),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const ContactUsPage()),
-                    );
-                  },
                 ),
               ],
             ),
@@ -794,9 +794,11 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
+
 // =======================
-// Rate Us Page
+// Rate Us Page (FULL CLASS)
 // =======================
+
 class RateUsPage extends StatefulWidget {
   const RateUsPage({super.key});
 
@@ -807,19 +809,42 @@ class RateUsPage extends StatefulWidget {
 class _RateUsPageState extends State<RateUsPage> {
   int _rating = 0;
   final TextEditingController _commentController = TextEditingController();
+  bool _isSubmitting = false;
 
-  void _submitRating() {
+  Future<void> _submitRating() async {
     if (_rating == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a rating first.')),
       );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Thank you for your feedback!')),
-    );
-    _commentController.clear();
-    setState(() => _rating = 0);
+
+    if (_isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      // 🔥 Save rating to Firebase Firestore
+      await FirebaseFirestore.instance.collection('ratings').add({
+        'rating': _rating,
+        'comment': _commentController.text.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thank you for your feedback!')),
+      );
+
+      // Reset form
+      _commentController.clear();
+      setState(() => _rating = 0);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving feedback: $e')),
+      );
+    } finally {
+      setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -840,6 +865,8 @@ class _RateUsPageState extends State<RateUsPage> {
               ),
             ),
             const SizedBox(height: 24),
+
+            // ⭐⭐⭐⭐⭐ Rating Stars
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (index) {
@@ -856,7 +883,10 @@ class _RateUsPageState extends State<RateUsPage> {
                 );
               }),
             ),
+
             const SizedBox(height: 16),
+
+            // Comment Input
             TextField(
               controller: _commentController,
               maxLines: 4,
@@ -867,18 +897,30 @@ class _RateUsPageState extends State<RateUsPage> {
                 ),
               ),
             ),
+
             const Spacer(),
+
+            // Submit Button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _submitRating,
+                onPressed: _isSubmitting ? null : _submitRating,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
                 ),
-                child: const Text(
+                child: _isSubmitting
+                    ? const SizedBox(
+                  height: 22,
+                  width: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                    : const Text(
                   'Submit',
                   style: TextStyle(fontSize: 18),
                 ),
@@ -892,40 +934,59 @@ class _RateUsPageState extends State<RateUsPage> {
 }
 
 // =======================
-// Contact Us Page
+// Contact Us Page (saves to Firestore)
 // =======================
-class ContactUsPage extends StatelessWidget {
+class ContactUsPage extends StatefulWidget {
   const ContactUsPage({super.key});
 
-  Future<void> _launchEmail() async {
-    final uri = Uri.parse(
-      'mailto:s-youssef.elmawla@zewailcity.edu.eg?subject=${Uri.encodeComponent('SymbioTech Support')}',
-    );
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else {
-      debugPrint('Could not launch email client');
+  @override
+  State<ContactUsPage> createState() => _ContactUsPageState();
+}
+
+class _ContactUsPageState extends State<ContactUsPage> {
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _messageController = TextEditingController();
+
+  bool _isSubmitting = false;
+
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      await FirebaseFirestore.instance.collection('contact_messages').add({
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'message': _messageController.text.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Message sent! We will contact you soon.')),
+      );
+
+      _nameController.clear();
+      _emailController.clear();
+      _messageController.clear();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error sending message: $e')),
+      );
+    } finally {
+      setState(() => _isSubmitting = false);
     }
   }
 
-  Future<void> _launchWhatsApp() async {
-    const phone = '+201234567890';
-    final uri = Uri.parse('https://wa.me/$phone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      debugPrint('Could not launch WhatsApp');
-    }
-  }
-
-  Future<void> _launchPhoneCall() async {
-    const phone = '+201234567890';
-    final uri = Uri.parse('tel:$phone');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else {
-      debugPrint('Could not launch phone dialer');
-    }
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _messageController.dispose();
+    super.dispose();
   }
 
   @override
@@ -934,59 +995,95 @@ class ContactUsPage extends StatelessWidget {
       appBar: AppBar(title: const Text('Contact Us')),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
-        child: Column(
-          children: [
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Icon(Icons.support_agent, size: 60, color: Colors.blue),
-                    SizedBox(height: 12),
-                    Text(
-                      'We are here to help!',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'If you have any questions, issues, or suggestions, feel free to reach out.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              const Text(
+                'Have a question or suggestion?\nSend us a message.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ),
-            const SizedBox(height: 24),
-            ListTile(
-              leading: const Icon(Icons.email, color: Colors.red),
-              title: const Text('Email'),
-              subtitle:
-              const Text('s-youssef.elmawla@zewailcity.edu.eg'),
-              onTap: _launchEmail,
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.message, color: Colors.green),
-              title: const Text('WhatsApp'),
-              subtitle: const Text('Chat with us on WhatsApp'),
-              onTap: _launchWhatsApp,
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.phone, color: Colors.blue),
-              title: const Text('Phone'),
-              subtitle: const Text('Call our support'),
-              onTap: _launchPhoneCall,
-            ),
-          ],
+              const SizedBox(height: 24),
+
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter your name';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) {
+                  final text = value?.trim() ?? '';
+                  if (text.isEmpty) return 'Please enter your email';
+                  if (!text.contains('@')) return 'Please enter a valid email';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+
+              TextFormField(
+                controller: _messageController,
+                decoration: const InputDecoration(
+                  labelText: 'Message',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 4,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter a message';
+                  }
+                  return null;
+                },
+              ),
+
+              const Spacer(),
+
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isSubmitting ? null : _submitForm,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                    height: 22,
+                    width: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                      : const Text(
+                    'Send Message',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
